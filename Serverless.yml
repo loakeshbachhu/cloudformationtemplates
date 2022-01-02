@@ -1,0 +1,88 @@
+
+service: etl
+variablesResolutionMode: 20210326
+
+plugins:
+  - serverless-pseudo-parameters
+  - serverless-step-functions
+  - serverless-dynamodb-stream-arn-plugin
+
+custom:
+  account: ${opt:account, 'default'}
+  region: ${opt:region, 'us-east-1'}
+  stage: ${opt:stage, 'dev'}
+
+provider:
+  name: aws
+  runtime: nodejs14.x
+  region: us-east-1
+  profile: default
+  stage: ${self:custom.stage}
+  lambdaHashingVersion: 20201221
+  deploymentRole: arn:aws:iam::123456789:role/managed/Deployment2
+  iam:
+    role: 
+      statements:
+        - Effect: Allow
+          Action:
+            - states:StartExecution
+            - dynamodb:ListStreams
+            - ssm:GetParameter
+          Resource: "*"
+    deploymentRole: arn:aws:iam::123456789:role/managed/devrole
+  environment:
+    TABLE_NAME: ${self:custom.stage}-table
+    
+
+package:
+  exclude:
+    - .gitignore
+    - bitbucket-pipelines.yml
+    - README.md
+    - serverless.yml
+  excludeDevDependencies: true
+  individually: true
+
+functions:
+  lambda_invoker:
+    handler: etl/lambda_invoker.handler
+    events:
+      - stream:
+          arn: arn:aws:dynamodb:us-east-1:123456789:table/table/stream/2021-12-17T22:56:55.626
+          batchSize: 1000
+          batchWindow: 10
+          startingPosition: LATEST
+          filterPatterns:
+            - eventName: [INSERT]
+      
+    name: lambda_invoker_${self:provider.stage}
+    description: Lambda To Triggger STATE MACHINE 
+    memorySize: 256
+    timeout: 900
+    environment:
+      statemachine_arn: 'arn:aws:states:us-east-1:123456789:stateMachine:${self:service}-chaining-lambda-function-state-machine${self:provider.stage}'
+
+  extractor:
+    handler: etl/extractor.handler
+    name: extractor_function_${self:provider.stage}
+    description: LAMBDA TO BE CALLED FIRST IN STATEMACHINE
+    memorySize: 256
+    timeout: 900
+
+  transformer:
+    handler: etl/transformer.handler
+    name: transformer_function_${self:provider.stage}
+    description: LAMBDA TO BE CALLED SECOND IN STATE MACHINE
+    memorySize: 256
+    timeout: 900 
+
+  loader:
+    handler: etl/loader.handler
+    name: loader_function_${self:provider.stage}
+    description: LAMBDA TO BE CALLED THIRD IN STATEMACHINE
+    memorySize: 256
+    timeout: 900 
+
+stepFunctions:
+  stateMachines:
+    chaining-lambda-function-state-machine: ${file(chaining-lambda-function-state-machine.yml):stateMachine}
